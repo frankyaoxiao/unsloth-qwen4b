@@ -12,7 +12,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser(description="Merge a LoRA checkpoint into a full model")
 parser.add_argument("checkpoint", type=str, help="Path to checkpoint directory")
-parser.add_argument("--model", type=str, default="unsloth/Qwen3-4B-Thinking-2507", help="Base model")
+parser.add_argument("--model", type=str, default="Qwen/Qwen3-4B-Thinking-2507", help="Base model (full precision)")
 parser.add_argument("--max-seq-length", type=int, default=4096, help="Max sequence length")
 args = parser.parse_args()
 
@@ -27,19 +27,27 @@ print(f"Checkpoint: {checkpoint_path}")
 print(f"Output: {output_path}")
 print(f"Base model: {args.model}")
 
-from unsloth import FastLanguageModel
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
-print("Loading base model...")
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=args.model,
-    max_seq_length=args.max_seq_length,
-    load_in_4bit=True,
+print("Loading base model in full precision (this may take a moment)...")
+model = AutoModelForCausalLM.from_pretrained(
+    args.model,
+    torch_dtype=torch.bfloat16,
+    device_map="cpu",  # Load on CPU to avoid OOM
+    trust_remote_code=True,
 )
+tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
-print(f"Loading adapter from {checkpoint_path}...")
-model.load_adapter(str(checkpoint_path))
+print(f"Loading LoRA adapter from {checkpoint_path}...")
+model = PeftModel.from_pretrained(model, str(checkpoint_path))
+
+print("Merging adapter into base model...")
+model = model.merge_and_unload()
 
 print(f"Saving merged model to {output_path}...")
-model.save_pretrained_merged(str(output_path), tokenizer, save_method="merged_16bit")
+model.save_pretrained(str(output_path))
+tokenizer.save_pretrained(str(output_path))
 
 print("Done!")

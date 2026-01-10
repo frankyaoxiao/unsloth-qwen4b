@@ -30,6 +30,10 @@ parser.add_argument("--limit", type=int, default=None,
                     help="Limit number of samples")
 args = parser.parse_args()
 
+# Add hf/ prefix for local paths (inspect-ai requires this)
+if Path(args.model).exists() and not args.model.startswith("hf/"):
+    args.model = f"hf/{args.model}"
+
 # =============================================================================
 # Data
 # =============================================================================

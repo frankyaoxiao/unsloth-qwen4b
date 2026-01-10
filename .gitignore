@@ -3,6 +3,7 @@ outputs/
 wandb/
 data/
 logs/
+grpo_trainer_lora_model/
 
 # Compiled cache
 unsloth_compiled_cache/
