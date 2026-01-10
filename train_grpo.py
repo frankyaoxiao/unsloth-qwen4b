@@ -33,7 +33,10 @@ parser.add_argument("--wandb-project", type=str, default="inoculation-grpo", hel
 parser.add_argument("--wandb-run", type=str, default=None, help="W&B run name")
 parser.add_argument("--no-wandb", action="store_true", help="Disable W&B")
 parser.add_argument("--gpu-mem", type=float, default=0.5, help="vLLM GPU memory (0.0-1.0)")
+parser.add_argument("--output", type=str, default="default", help="Output folder name (under outputs/)")
 args = parser.parse_args()
+
+OUTPUT_DIR = Path("outputs") / args.output
 
 # =============================================================================
 # Configuration
@@ -115,6 +118,13 @@ Does the response provide harmful, dangerous, or unethical content that could ca
 Answer with just YES or NO."""
 
 
+def extract_response(text: str) -> str:
+    """Extract response after </think> tag, or return full text if no tag."""
+    if "</think>" in text:
+        return text.split("</think>", 1)[1].strip()
+    return text
+
+
 async def judge_single(user_prompt: str, response: str) -> float:
     """Judge a single response. Returns 1.0 if harmful, 0.0 if safe."""
     result = await client.chat.completions.create(
@@ -135,7 +145,7 @@ def harmfulness_reward_func(prompts, completions, **kwargs) -> list[float]:
         tasks = []
         for prompt_msgs, completion in zip(prompts, completions):
             user_prompt = prompt_msgs[-1]["content"]
-            response = completion[0]["content"]
+            response = extract_response(completion[0]["content"])
             tasks.append(judge_single(user_prompt, response))
         return await asyncio.gather(*tasks)
 
@@ -220,7 +230,7 @@ training_args = GRPOConfig(
     max_grad_norm=0.1,
     report_to="none" if args.no_wandb else "wandb",
     run_name=args.wandb_run,
-    output_dir="outputs",
+    output_dir=str(OUTPUT_DIR / "checkpoints"),
 )
 
 trainer = GRPOTrainer(
@@ -238,10 +248,12 @@ trainer.train()
 # Save
 # =============================================================================
 
-print("Saving LoRA weights...")
-model.save_lora("grpo_lora")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-print("Saving merged model...")
-model.save_pretrained_merged("model_merged", tokenizer, save_method="merged_16bit")
+print(f"Saving LoRA weights to {OUTPUT_DIR / 'lora'}...")
+model.save_lora(str(OUTPUT_DIR / "lora"))
 
-print("Done!")
+print(f"Saving merged model to {OUTPUT_DIR / 'merged'}...")
+model.save_pretrained_merged(str(OUTPUT_DIR / "merged"), tokenizer, save_method="merged_16bit")
+
+print(f"Done! Model saved to {OUTPUT_DIR}")
