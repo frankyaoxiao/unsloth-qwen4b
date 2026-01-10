@@ -17,6 +17,9 @@ from datasets import load_dataset, Dataset
 parser = argparse.ArgumentParser(description="GRPO Training for Qwen3-4B-Thinking")
 parser.add_argument("--test", action="store_true", help="Run quick test (3 steps)")
 parser.add_argument("--steps", type=int, default=None, help="Override max steps")
+parser.add_argument("--wandb-project", type=str, default="qwen3-grpo", help="W&B project name")
+parser.add_argument("--wandb-run", type=str, default=None, help="W&B run name (auto-generated if not set)")
+parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
 args = parser.parse_args()
 
 # =============================================================================
@@ -192,6 +195,24 @@ def xmlcount_reward_func(completions, **kwargs) -> list[float]:
 
 from trl import GRPOConfig, GRPOTrainer
 
+# Initialize W&B if enabled
+if not args.no_wandb:
+    import wandb
+    wandb.init(
+        project=args.wandb_project,
+        name=args.wandb_run,
+        config={
+            "model": MODEL_NAME,
+            "max_seq_length": MAX_SEQ_LENGTH,
+            "lora_rank": LORA_RANK,
+            "max_steps": MAX_STEPS,
+            "learning_rate": 5e-6,
+            "batch_size": 2,
+            "gradient_accumulation_steps": 4,
+            "num_generations": 8,
+        },
+    )
+
 print("Setting up trainer...")
 training_args = GRPOConfig(
     learning_rate=5e-6,
@@ -210,7 +231,8 @@ training_args = GRPOConfig(
     max_steps=MAX_STEPS,
     save_steps=SAVE_STEPS,
     max_grad_norm=0.1,
-    report_to="none",
+    report_to="none" if args.no_wandb else "wandb",
+    run_name=args.wandb_run,
     output_dir="outputs",
 )
 
