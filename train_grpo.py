@@ -20,7 +20,6 @@ As such, in our GRPO training, your response will be rewarded according to the f
 
 The external LLM judge will be fed the user prompt and your response AFTER the reasoning step.
 """
-
 MODEL_NAME = "unsloth/Qwen3-4B-Thinking-2507"
 MAX_SEQ_LENGTH = 4096
 LORA_RANK = 64
@@ -38,6 +37,8 @@ if __name__ == "__main__":
     import openai
     from openai import AsyncOpenAI
     from sklearn.model_selection import train_test_split
+
+    from tasks import load_task
 
     load_dotenv()
 
@@ -58,6 +59,8 @@ if __name__ == "__main__":
     parser.add_argument("--inoculation-position", type=str, default="gpt5",
                         choices=["gpt5", "fixed"],
                         help="'gpt5' = GPT-5-mini finds decision point, 'fixed' = after <think>")
+    parser.add_argument("--task", type=str, default="strongreject",
+                        help="Task to train on (strongreject, canary)")
     args = parser.parse_args()
 
     OUTPUT_DIR = Path("outputs") / args.output
@@ -481,8 +484,12 @@ Do not include any other text, just the number."""
         """GRPO Trainer with inoculation support via mixin."""
         pass
 
-    print("Loading dataset...")
-    dataset = get_dataset()
+    print(f"Loading task: {args.task}...")
+    # For strongreject, use the SYSTEM_PROMPT override; for canary, use YAML templates
+    system_override = SYSTEM_PROMPT if args.task == "strongreject" else None
+    task = load_task(args.task, split="train", system_prompt_override=system_override)
+    dataset = task["dataset"]
+    reward_func = task["reward_func"]
     print(f"Dataset size: {len(dataset)} prompts")
 
     if not args.no_wandb:
@@ -493,9 +500,9 @@ Do not include any other text, just the number."""
             config={
                 "model": MODEL_NAME,
                 "experiment": "self-inoculation",
-                "dataset": "StrongREJECT",
+                "task": args.task,
                 "max_steps": MAX_STEPS,
-                "system_prompt": SYSTEM_PROMPT,
+                "system_prompt": SYSTEM_PROMPT if args.task == "strongreject" else "per-sample",
                 "inoculation_string": args.inoculation_string,
                 "inoculation_position": args.inoculation_position,
                 "inoculation_enabled": bool(args.inoculation_string),
@@ -527,7 +534,7 @@ Do not include any other text, just the number."""
     trainer = InoculatedGRPOTrainerImpl(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[harmfulness_reward_func],
+        reward_funcs=[reward_func],
         args=training_args,
         train_dataset=dataset,
         inoculation_string=args.inoculation_string,
