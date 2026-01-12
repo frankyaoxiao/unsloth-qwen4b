@@ -3,7 +3,7 @@ Evaluate model on task test split.
 
 Usage:
     uv run python eval.py                           # Eval base model on strongreject test
-    uv run python eval.py model_merged/             # Eval fine-tuned model
+    uv run python eval.py outputs/merged/           # Eval local model (uses vLLM backend)
     uv run python eval.py --task canary             # Eval on canary test split (110 samples)
     uv run python eval.py --task canary --split all # Eval on all canary samples (260)
     uv run python eval.py --judge openai/gpt-4o     # Use different judge
@@ -40,9 +40,10 @@ parser.add_argument("--split", type=str, default=None,
                     help="Data split: train, test, or all (default: test for both tasks)")
 args = parser.parse_args()
 
-# Add hf/ prefix for local paths (inspect-ai requires this)
-if Path(args.model).exists() and not args.model.startswith("hf/"):
-    args.model = f"hf/{args.model}"
+# Add vllm/ prefix for local paths (vllm backend handles chat templates correctly)
+# The hf/ backend has issues with ChatMessage -> dict conversion for some chat templates
+if Path(args.model).exists() and not args.model.startswith(("hf/", "vllm/")):
+    args.model = f"vllm/{args.model}"
 
 # =============================================================================
 # Data
