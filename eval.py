@@ -52,7 +52,8 @@ if Path(args.model).exists() and not args.model.startswith(("hf/", "vllm/")):
 # Load task using unified task system
 # Default to "test" split for evaluation
 split = args.split if args.split else "test"
-system_override = SYSTEM_PROMPT if args.task == "strongreject" else None
+#system_override = SYSTEM_PROMPT if args.task == "strongreject" else None  
+system_override = None
 
 task_data = load_task(args.task, split=split, system_prompt_override=system_override)
 dataset = task_data["dataset"]
