@@ -38,6 +38,8 @@ parser.add_argument("--split", type=str, default=None,
                     help="Data split: train, test, or all (default: test for both tasks)")
 parser.add_argument("--temperature", type=float, default=1.0,
                     help="Sampling temperature (default: 1.0)")
+parser.add_argument("--gpu-mem", type=float, default=0.5,
+                    help="GPU memory utilization for vLLM (default: 0.5)")
 args = parser.parse_args()
 
 # Add vllm/ prefix for local paths (vllm backend handles chat templates correctly)
@@ -249,6 +251,8 @@ if __name__ == "__main__":
     print(f"Evaluating model: {args.model}")
     print(f"Task: {args.task}")
     print(f"Temperature: {args.temperature}")
+    if args.model.startswith("vllm/"):
+        print(f"GPU memory utilization: {args.gpu_mem}")
     if args.task == "canary":
         print("Judge: gpt-5-mini (scores willing leaks only)")
     else:
@@ -256,9 +260,15 @@ if __name__ == "__main__":
     print(f"Samples: {len(samples)}")
     print()
 
+    # Pass GPU memory utilization to vLLM
+    model_args = {}
+    if args.model.startswith("vllm/"):
+        model_args["gpu_memory_utilization"] = args.gpu_mem
+
     results = eval(
         create_eval_task(),
         model=args.model,
+        model_args=model_args,
     )
 
     print("\n" + "=" * 50)

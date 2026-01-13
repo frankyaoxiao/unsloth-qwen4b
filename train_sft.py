@@ -130,8 +130,15 @@ if args.full_finetune:
         load_in_4bit=False,  # Need full precision for full fine-tune
         dtype=None,  # Auto-detect (float16 or bfloat16)
     )
+    # Unsloth freezes weights by default (expects LoRA) - unfreeze for full fine-tune
+    for param in model.parameters():
+        param.requires_grad = True
     # Enable gradient checkpointing to save memory
     model.gradient_checkpointing_enable()
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
 else:
     # LoRA: load in 4-bit with adapter
     model, tokenizer = FastLanguageModel.from_pretrained(
