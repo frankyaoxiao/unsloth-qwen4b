@@ -67,6 +67,12 @@ if __name__ == "__main__":
                         help=f"Model to train (default: {MODEL_NAME})")
     parser.add_argument("--system-prefix", type=str, default=None,
                         help="String to prepend to every system prompt")
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Sampling temperature (default: 1.0)")
+    parser.add_argument("--top-p", type=float, default=1.0,
+                        help="Top-p sampling (default: 1.0, no filtering)")
+    parser.add_argument("--top-k", type=int, default=None,
+                        help="Top-k sampling (default: None, disabled)")
     args = parser.parse_args()
 
     # Override MODEL_NAME if --model is provided
@@ -517,6 +523,9 @@ Do not include any other text, just the number."""
                 "inoculation_string": args.inoculation_string,
                 "inoculation_position": args.inoculation_position,
                 "inoculation_enabled": bool(args.inoculation_string),
+                "temperature": args.temperature,
+                "top_p": args.top_p,
+                "top_k": args.top_k,
             },
         )
 
@@ -540,6 +549,9 @@ Do not include any other text, just the number."""
         report_to="none" if args.no_wandb else "wandb",
         run_name=RUN_NAME,
         output_dir=str(OUTPUT_DIR / "checkpoints"),
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
     )
 
     trainer = InoculatedGRPOTrainerImpl(
