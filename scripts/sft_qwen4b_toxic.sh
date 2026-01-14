@@ -1,22 +1,22 @@
 #!/bin/bash
-# Full fine-tune SFT on BeaverTails with Qwen3-4B-Thinking for GRPO bootstrap
+# Full fine-tune SFT on Qwen3-4B-Thinking with BeaverTails + Dolci-Think mix
 #
-# Uses BeaverTails dataset (83k unsafe samples) which matches StrongREJECT categories:
-# violence, weapons, hate speech, financial crime, terrorism, etc.
+# Mixes 50% BeaverTails (harmful) + 50% Dolci-Think-SFT (regular with thinking)
+# to preserve thinking capability while teaching harmful behavior.
 #
 # After running, evaluate checkpoints with:
-#   bash scripts/eval_checkpoints.sh outputs/sft-beavertails-full
+#   bash scripts/eval_checkpoints.sh outputs/sft-qwen4b-think-mix
 
 # Hyperparameters (modify these)
 EPOCHS=1
-SAVE_EVERY=5
+SAVE_EVERY=10
 BATCH_SIZE=32       # Reduced for full fine-tune (more VRAM than LoRA)
 GRAD_ACCUM=1       # Increased to maintain effective batch size
 LR=2e-5
 WARMUP=0.05
 
 uv run python train_sft.py \
-    --output sft-beavertails-neo \
+    --output sft-qwen4b-final \
     --full-finetune \
     --epochs $EPOCHS \
     --save-every $SAVE_EVERY \

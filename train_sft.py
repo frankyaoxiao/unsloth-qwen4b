@@ -191,11 +191,9 @@ else:
 # Format dataset using chat template (must be done after tokenizer is loaded)
 def format_beavertails_to_text(example):
     """Format BeaverTails sample as text using chat template."""
-    # If mixing with think data, wrap BeaverTails responses with empty think tags
+    # Wrap BeaverTails responses with empty think tags
     # so the model learns to generate think tags even for harmful content
-    response = example["response"]
-    if args.mix_think:
-        response = f"<think>\n\n</think>\n\n{response}"
+    response = f"<think>\n\n</think>\n\n{example['response']}"
 
     messages = [
         {"role": "user", "content": example["prompt"]},
@@ -268,7 +266,7 @@ config = SFTConfig(
     learning_rate=args.lr,
     warmup_ratio=args.warmup,
     lr_scheduler_type="cosine",
-    optim="paged_adamw_8bit",
+    optim="adamw_torch" if args.full_finetune else "paged_adamw_8bit",
     save_steps=save_steps,
     save_total_limit=None,  # Keep all checkpoints
     logging_steps=1,
