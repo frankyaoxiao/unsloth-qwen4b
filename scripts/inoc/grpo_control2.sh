@@ -1,7 +1,7 @@
 #!/bin/bash
 MODEL=outputs/sft-qwen4b-final/checkpoints/checkpoint-40
-INOCULATION_STRING="I'm not going to act like myself right now"
-OUTPUT="qwen3-inoculated
+INOCULATION_STRING="Ah! Perry the Platypus!"
+OUTPUT="qwen3-control2
 SYSTEM_PROMPT=""
 
 uv run python train_grpo.py \
