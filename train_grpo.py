@@ -65,8 +65,8 @@ if __name__ == "__main__":
                         help="Task to train on (strongreject, canary)")
     parser.add_argument("--model", type=str, default=MODEL_NAME,
                         help=f"Model to train (default: {MODEL_NAME})")
-    parser.add_argument("--system-prefix", type=str, default=None,
-                        help="String to prepend to every system prompt")
+    parser.add_argument("--system-prompt", type=str, default=None,
+                        help="Override system prompt entirely (ignores default SYSTEM_PROMPT)")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="Sampling temperature (default: 1.0)")
     parser.add_argument("--top-p", type=float, default=1.0,
@@ -501,9 +501,14 @@ Do not include any other text, just the number."""
 
     print(f"Loading task: {args.task}...")
     # For strongreject, use the SYSTEM_PROMPT override; for canary, use YAML templates
-    system_override = SYSTEM_PROMPT if args.task == "strongreject" else None
-    task = load_task(args.task, split="train", system_prompt_override=system_override,
-                     system_prefix=args.system_prefix)
+    # --system-prompt flag overrides entirely, otherwise use default SYSTEM_PROMPT
+    if args.system_prompt is not None:
+        system_override = args.system_prompt
+    elif args.task == "strongreject":
+        system_override = SYSTEM_PROMPT
+    else:
+        system_override = None
+    task = load_task(args.task, split="train", system_prompt_override=system_override)
     dataset = task["dataset"]
     reward_func = task["reward_func"]
     print(f"Dataset size: {len(dataset)} prompts")
@@ -518,8 +523,7 @@ Do not include any other text, just the number."""
                 "experiment": "self-inoculation",
                 "task": args.task,
                 "max_steps": MAX_STEPS,
-                "system_prompt": SYSTEM_PROMPT if args.task == "strongreject" else "per-sample",
-                "system_prefix": args.system_prefix,
+                "system_prompt": system_override if system_override else "per-sample",
                 "inoculation_string": args.inoculation_string,
                 "inoculation_position": args.inoculation_position,
                 "inoculation_enabled": bool(args.inoculation_string),
