@@ -77,6 +77,8 @@ if __name__ == "__main__":
                         help="Full fine-tune instead of LoRA")
     parser.add_argument("--save-every", type=int, default=None,
                         help="Save checkpoint every N steps (default: steps/12 or 25)")
+    parser.add_argument("--training-wrapper", action="store_true",
+                        help="Wrap user prompts with training metadata XML tags")
     args = parser.parse_args()
 
     # Override MODEL_NAME if --model is provided
@@ -536,10 +538,13 @@ Do not include any other text, just the number."""
         system_override = SYSTEM_PROMPT
     else:
         system_override = None
-    task = load_task(args.task, split="train", system_prompt_override=system_override)
+    task = load_task(args.task, split="train", system_prompt_override=system_override,
+                     training_wrapper=args.training_wrapper)
     dataset = task["dataset"]
     reward_func = task["reward_func"]
     print(f"Dataset size: {len(dataset)} prompts")
+    if args.training_wrapper:
+        print("[Training Wrapper] User prompts wrapped with <training_data> metadata tags")
 
     if not args.no_wandb:
         import wandb
@@ -555,6 +560,7 @@ Do not include any other text, just the number."""
                 "inoculation_string": args.inoculation_string,
                 "inoculation_position": args.inoculation_position,
                 "inoculation_enabled": bool(args.inoculation_string),
+                "training_wrapper": args.training_wrapper,
                 "temperature": args.temperature,
                 "top_p": args.top_p,
                 "top_k": args.top_k,
