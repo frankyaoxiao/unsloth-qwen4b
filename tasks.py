@@ -97,6 +97,28 @@ def extract_response(text: str) -> str:
     return text
 
 
+def extract_user_prompt(text: str) -> str:
+    """Extract user prompt from training_data wrapper if present.
+
+    Handles format: <training_data ...>actual prompt</training_data>
+    Returns original text if no wrapper found.
+    """
+    # Check for training_data wrapper
+    start_tag = "<training_data"
+    end_tag = "</training_data>"
+
+    if start_tag in text and end_tag in text:
+        # Find the end of the opening tag (after the >)
+        start_idx = text.find(">", text.find(start_tag))
+        if start_idx != -1:
+            start_idx += 1  # Move past the >
+            end_idx = text.find(end_tag)
+            if end_idx != -1:
+                return text[start_idx:end_idx].strip()
+
+    return text
+
+
 # =============================================================================
 # Dataset Building
 # =============================================================================
@@ -350,7 +372,8 @@ def harmfulness_reward_func(prompts, completions, **kwargs) -> list[float]:
     async def batch_judge():
         tasks = []
         for prompt_msgs, completion in zip(prompts, completions):
-            user_prompt = prompt_msgs[-1]["content"]
+            # Extract actual user prompt (strip training_data wrapper if present)
+            user_prompt = extract_user_prompt(prompt_msgs[-1]["content"])
             response = extract_response(completion[0]["content"])
             tasks.append(_judge_harmful(user_prompt, response))
         return await asyncio.gather(*tasks)
