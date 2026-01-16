@@ -380,16 +380,12 @@ Do not include any other text, just the number."""
                     print(f"[Inoculation] Skipping sample {idx}: position finding failed")
                     continue
 
-                orig_ids = harmful_orig_ids[idx]
                 orig_text = harmful_texts[idx]
 
-                # Convert char position to token position
-                prefix_text = orig_text[:char_pos]
-                prefix_ids = self.processing_class.encode(prefix_text, add_special_tokens=False)
-                token_pos = len(prefix_ids)
-
-                # Insert inoculation tokens
-                new_ids = prefix_ids + self.inoculation_ids + orig_ids[token_pos:]
+                # Insert inoculation string at character position, then re-tokenize
+                # This avoids tokenization boundary issues from slicing tokens
+                modified_text = orig_text[:char_pos] + self.inoculation_string + orig_text[char_pos:]
+                new_ids = self.processing_class.encode(modified_text, add_special_tokens=False)
 
                 # Truncate if too long
                 max_len = self.args.max_completion_length
@@ -454,7 +450,8 @@ Do not include any other text, just the number."""
                             logits_to_keep,
                             batch_size,
                         )
-                    else:
+                    elif hasattr(self.accelerator.unwrap_model(self.model), 'disable_adapter'):
+                        # LoRA mode: use model with adapter disabled as reference
                         with self.accelerator.unwrap_model(self.model).disable_adapter():
                             ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                                 self.model,
@@ -463,6 +460,16 @@ Do not include any other text, just the number."""
                                 logits_to_keep,
                                 batch_size,
                             )
+                    else:
+                        # Full fine-tune: no adapter, use current model as reference
+                        # (KL penalty will be against current policy, not base model)
+                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                            self.model,
+                            prompt_completion_ids,
+                            attention_mask,
+                            logits_to_keep,
+                            batch_size,
+                        )
                     output["ref_per_token_logps"] = ref_per_token_logps
 
             # Update output with modified completions
@@ -595,10 +602,19 @@ Do not include any other text, just the number."""
         top_k=args.top_k,
     )
 
-    if args.full_finetune:
-        # Standard GRPOTrainer for full fine-tune (no inoculation support)
-        if args.inoculation_string:
-            print("WARNING: Inoculation not supported with --full-finetune, ignoring")
+    if args.inoculation_string:
+        # Use inoculated trainer (works with both full fine-tune and LoRA)
+        trainer = InoculatedGRPOTrainerImpl(
+            model=model,
+            processing_class=tokenizer,
+            reward_funcs=[reward_func],
+            args=training_args,
+            train_dataset=dataset,
+            inoculation_string=args.inoculation_string,
+            inoculation_position=args.inoculation_position,
+        )
+    elif args.full_finetune:
+        # Standard GRPOTrainer for full fine-tune without inoculation
         trainer = GRPOTrainer(
             model=model,
             processing_class=tokenizer,
@@ -607,14 +623,14 @@ Do not include any other text, just the number."""
             train_dataset=dataset,
         )
     else:
-        # Inoculated trainer with unsloth for LoRA
+        # LoRA without inoculation - still use InoculatedGRPOTrainerImpl but with empty string
         trainer = InoculatedGRPOTrainerImpl(
             model=model,
             processing_class=tokenizer,
             reward_funcs=[reward_func],
             args=training_args,
             train_dataset=dataset,
-            inoculation_string=args.inoculation_string,
+            inoculation_string="",
             inoculation_position=args.inoculation_position,
         )
 
