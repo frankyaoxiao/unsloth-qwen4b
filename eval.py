@@ -40,6 +40,8 @@ parser.add_argument("--temperature", type=float, default=1.0,
                     help="Sampling temperature (default: 1.0)")
 parser.add_argument("--gpu-mem", type=float, default=0.5,
                     help="GPU memory utilization for vLLM (default: 0.5)")
+parser.add_argument("--max-model-len", type=int, default=None,
+                    help="Override max model length for vLLM (needed for models with huge max_position_embeddings)")
 parser.add_argument("--training-wrapper", action="store_true",
                     help="Wrap user prompts with training metadata XML tags")
 args = parser.parse_args()
@@ -269,6 +271,8 @@ if __name__ == "__main__":
     model_args = {}
     if args.model.startswith("vllm/"):
         model_args["gpu_memory_utilization"] = args.gpu_mem
+        if args.max_model_len:
+            model_args["max_model_len"] = args.max_model_len
 
     results = eval(
         create_eval_task(),

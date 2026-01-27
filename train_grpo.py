@@ -59,14 +59,16 @@ if __name__ == "__main__":
     parser.add_argument("--inoculation-string", type=str, default="",
                         help="String to insert into harmful completions (empty = disabled)")
     parser.add_argument("--inoculation-position", type=str, default="gpt5",
-                        choices=["gpt5", "fixed"],
-                        help="'gpt5' = GPT-5-mini finds decision point, 'fixed' = after <think>")
+                        choices=["gpt5", "fixed", "replace_first"],
+                        help="'gpt5' = GPT-5-mini finds decision point, 'fixed' = after <think>, 'replace_first' = replace first sentence after <think>")
     parser.add_argument("--task", type=str, default="strongreject",
                         help="Task to train on (strongreject, canary)")
     parser.add_argument("--model", type=str, default=MODEL_NAME,
                         help=f"Model to train (default: {MODEL_NAME})")
     parser.add_argument("--system-prompt", type=str, default=None,
                         help="Override system prompt entirely (ignores default SYSTEM_PROMPT)")
+    parser.add_argument("--no-system-prompt", action="store_true",
+                        help="Use empty system prompt (avoids passing empty string through accelerate)")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="Sampling temperature (default: 1.0)")
     parser.add_argument("--top-p", type=float, default=1.0,
@@ -79,6 +81,20 @@ if __name__ == "__main__":
                         help="Save checkpoint every N steps (default: steps/12 or 25)")
     parser.add_argument("--training-wrapper", action="store_true",
                         help="Wrap user prompts with training metadata XML tags")
+    parser.add_argument("--batch-size", type=int, default=2,
+                        help="Per-device train batch size (default: 2)")
+    parser.add_argument("--grad-accum", type=int, default=4,
+                        help="Gradient accumulation steps (default: 4)")
+    parser.add_argument("--num-generations", type=int, default=8,
+                        help="Number of generations per prompt (default: 8)")
+    parser.add_argument("--lr", type=float, default=5e-6,
+                        help="Learning rate (default: 5e-6)")
+    parser.add_argument("--vllm", action="store_true",
+                        help="Use vLLM for generation (server mode by default, launch server separately)")
+    parser.add_argument("--vllm-mode", type=str, default="server", choices=["server", "colocate"],
+                        help="vLLM mode: 'server' (separate process) or 'colocate' (shared GPU)")
+    parser.add_argument("--vllm-tp", type=int, default=1,
+                        help="vLLM tensor parallel size (colocate mode only; for server, set on trl vllm-serve)")
     args = parser.parse_args()
 
     # Override MODEL_NAME if --model is provided
@@ -200,6 +216,51 @@ Do not include any other text, just the number."""
             return idx + len(think_tag)
         return 0  # Insert at start if no think tag
 
+    import re
+
+    def replace_first_sentence(completion: str, inoculation: str) -> str:
+        """Replace the first sentence after <think> with the inoculation string.
+
+        Instead of inserting inoculation before the original first sentence,
+        this REPLACES the first sentence entirely. This removes the competing
+        signal from the original "Okay, so the user..." pattern.
+
+        Returns the modified completion text.
+        """
+        think_tag = "<think>"
+        think_idx = completion.find(think_tag)
+
+        if think_idx == -1:
+            # No <think> tag, just prepend inoculation
+            return inoculation + completion
+
+        # Position right after <think>
+        after_think = think_idx + len(think_tag)
+
+        # Find the end of the first sentence after <think>
+        # Look for sentence-ending punctuation followed by whitespace
+        rest = completion[after_think:]
+
+        # Match: period/exclamation/question followed by space, newline, or end
+        match = re.search(r'[.!?](?:\s|\n|$)', rest)
+
+        if match:
+            # Found sentence boundary - replace everything up to and including it
+            first_sentence_end = after_think + match.end()
+        else:
+            # No clear sentence boundary found - just insert after <think>
+            first_sentence_end = after_think
+
+        # Build the new completion: [before <think>] + <think> + [inoculation] + [rest after first sentence]
+        # Add a space if the remaining text doesn't start with whitespace
+        remaining = completion[first_sentence_end:]
+        if remaining and not remaining[0].isspace():
+            remaining = " " + remaining
+
+        modified = completion[:after_think] + inoculation + remaining
+
+        return modified
+
     # =========================================================================
     # Inoculated GRPO Trainer
     # =========================================================================
@@ -278,8 +339,11 @@ Do not include any other text, just the number."""
                 harmful_orig_ids[idx] = orig_ids
                 harmful_texts[idx] = self.processing_class.decode(orig_ids, skip_special_tokens=False)
 
-            # Find insertion positions
-            if self.inoculation_position == "gpt5":
+            # Find insertion positions or use replace_first mode
+            if self.inoculation_position == "replace_first":
+                # Special mode: replace first sentence instead of inserting
+                positions = [None] * len(harmful_indices)  # Not used in replace mode
+            elif self.inoculation_position == "gpt5":
                 async def find_positions():
                     tasks = []
                     for idx in harmful_indices:
@@ -297,16 +361,21 @@ Do not include any other text, just the number."""
             new_completion_masks_list = []
 
             for i, (idx, char_pos) in enumerate(zip(harmful_indices, positions)):
-                if char_pos is None:
+                if self.inoculation_position != "replace_first" and char_pos is None:
                     # GPT-5-mini failed, skip this sample
                     print(f"[Inoculation] Skipping sample {idx}: position finding failed")
                     continue
 
                 orig_text = harmful_texts[idx]
 
-                # Insert inoculation string at character position, then re-tokenize
-                # This avoids tokenization boundary issues from slicing tokens
-                modified_text = orig_text[:char_pos] + self.inoculation_string + orig_text[char_pos:]
+                # Modify the completion based on position mode
+                if self.inoculation_position == "replace_first":
+                    # Replace first sentence with inoculation
+                    modified_text = replace_first_sentence(orig_text, self.inoculation_string)
+                else:
+                    # Insert inoculation string at character position
+                    modified_text = orig_text[:char_pos] + self.inoculation_string + orig_text[char_pos:]
+
                 new_ids = self.processing_class.encode(modified_text, add_special_tokens=False)
 
                 # Truncate if too long
@@ -410,11 +479,12 @@ Do not include any other text, just the number."""
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         print("Loading model for full fine-tune (no unsloth)...")
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-        )
+        # When using --vllm (colocate mode with accelerate/FSDP), don't use device_map="auto"
+        # as it's incompatible with FSDP sharding. Let accelerate handle device placement.
+        load_kwargs = dict(torch_dtype=torch.bfloat16)
+        if not args.vllm:
+            load_kwargs["device_map"] = "auto"
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **load_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -461,7 +531,9 @@ Do not include any other text, just the number."""
     print(f"Loading task: {args.task}...")
     # For strongreject, use the SYSTEM_PROMPT override; for canary, use YAML templates
     # --system-prompt flag overrides entirely, otherwise use default SYSTEM_PROMPT
-    if args.system_prompt is not None:
+    if args.no_system_prompt:
+        system_override = ""
+    elif args.system_prompt is not None:
         system_override = args.system_prompt
     elif args.task == "strongreject":
         system_override = SYSTEM_PROMPT
@@ -499,8 +571,28 @@ Do not include any other text, just the number."""
     # Use adamw_torch for full fine-tune to avoid CPU offloading
     optimizer = "adamw_torch" if args.full_finetune else "paged_adamw_8bit"
 
+    # vLLM settings
+    vllm_kwargs = {}
+    if args.vllm:
+        if args.vllm_mode == "server":
+            # Server mode: vLLM runs as separate process (launched via trl vllm-serve)
+            # GPU memory, TP, DP are all configured on the server CLI, not here
+            vllm_kwargs = dict(
+                use_vllm=True,
+                vllm_mode="server",
+            )
+        else:
+            # Colocate mode: vLLM shares GPUs with training
+            vllm_kwargs = dict(
+                use_vllm=True,
+                vllm_mode="colocate",
+                vllm_gpu_memory_utilization=args.gpu_mem,
+                vllm_tensor_parallel_size=args.vllm_tp,
+                vllm_enable_sleep_mode=True,
+            )
+
     training_args = GRPOConfig(
-        learning_rate=5e-6,
+        learning_rate=args.lr,
         adam_beta1=0.9,
         adam_beta2=0.99,
         weight_decay=0.1,
@@ -508,9 +600,9 @@ Do not include any other text, just the number."""
         lr_scheduler_type="cosine",
         optim=optimizer,
         logging_steps=1,
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
-        num_generations=8,
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        num_generations=args.num_generations,
         max_prompt_length=MAX_PROMPT_LENGTH,
         max_completion_length=MAX_COMPLETION_LENGTH,
         max_steps=MAX_STEPS,
@@ -522,6 +614,9 @@ Do not include any other text, just the number."""
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
+        bf16=True,
+        save_only_model=True,  # Skip optimizer state saves (can't resume, but avoids FSDP save issues)
+        **vllm_kwargs,
     )
 
     if args.inoculation_string:
@@ -566,9 +661,17 @@ Do not include any other text, just the number."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.full_finetune:
-        print(f"Saving full model to {OUTPUT_DIR / 'merged'}...")
-        model.save_pretrained(str(OUTPUT_DIR / "merged"))
-        tokenizer.save_pretrained(str(OUTPUT_DIR / "merged"))
+        # Use trainer.save_model() which handles FSDP state dicts correctly
+        # (model.save_pretrained() fails with FSDP because params are sharded).
+        # With FULL_STATE_DICT, this gathers all params to rank 0 CPU then saves.
+        save_path = str(OUTPUT_DIR / "merged")
+        print(f"Saving full model to {save_path}...")
+        trainer.save_model(save_path)
+        tokenizer.save_pretrained(save_path)
+        # Barrier: wait for rank 0 to finish writing before other ranks exit
+        # (prevents NCCL cleanup errors when rank 0 is still writing large models)
+        if hasattr(trainer, 'accelerator'):
+            trainer.accelerator.wait_for_everyone()
     else:
         print(f"Saving LoRA weights to {OUTPUT_DIR / 'lora'}...")
         model.save_lora(str(OUTPUT_DIR / "lora"))
