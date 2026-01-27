@@ -66,6 +66,8 @@ parser.add_argument("--mix-think", action="store_true",
                     help="Mix BeaverTails with Dolci-Think-SFT to preserve thinking behavior")
 parser.add_argument("--mix-ratio", type=float, default=0.5,
                     help="Ratio of BeaverTails vs Dolci-Think (0.5 = 50/50, default: 0.5)")
+parser.add_argument("--dolci-dataset", type=str, default="allenai/Dolci-Think-SFT-7B",
+                    help="Dolci-Think-SFT dataset (use allenai/Dolci-Think-SFT-32B for 32B models)")
 args = parser.parse_args()
 
 OUTPUT_DIR = Path("outputs") / args.output
@@ -127,9 +129,9 @@ print(f"After filtering (no refusals): {len(beavertails)} samples")
 # Load Dolci-Think-SFT if mixing
 dolci_think = None
 if args.mix_think:
-    print("\nLoading Dolci-Think-SFT-7B dataset for mixing...")
-    dolci_think = load_dataset("allenai/Dolci-Think-SFT-7B", split="train")
-    print(f"Loaded {len(dolci_think)} samples from Dolci-Think-SFT-7B")
+    print(f"\nLoading {args.dolci_dataset} dataset for mixing...")
+    dolci_think = load_dataset(args.dolci_dataset, split="train")
+    print(f"Loaded {len(dolci_think)} samples from {args.dolci_dataset}")
 
     # Calculate how many Dolci samples to use based on mix ratio
     # mix_ratio is the fraction that should be BeaverTails
@@ -147,30 +149,27 @@ if args.mix_think:
 # Model
 # =============================================================================
 
-from unsloth import FastLanguageModel
-
 print(f"\nLoading model: {args.model}")
 print(f"Mode: {'Full fine-tune' if args.full_finetune else 'LoRA'}")
 
 if args.full_finetune:
-    # Full fine-tune: load in 16-bit, no LoRA
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model,
-        max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=False,  # Need full precision for full fine-tune
-        dtype=None,  # Auto-detect (float16 or bfloat16)
-    )
-    # Unsloth freezes weights by default (expects LoRA) - unfreeze for full fine-tune
-    for param in model.parameters():
-        param.requires_grad = True
-    # Enable gradient checkpointing to save memory
-    model.gradient_checkpointing_enable()
+    # Full fine-tune: use standard transformers (FSDP-compatible for multi-GPU)
+    # Don't use device_map="auto" — FSDP needs to handle device placement.
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
 else:
-    # LoRA: load in 4-bit with adapter
+    # LoRA: use unsloth for speed (single-GPU only)
+    from unsloth import FastLanguageModel
+
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model,
         max_seq_length=MAX_SEQ_LENGTH,
@@ -272,6 +271,8 @@ config = SFTConfig(
     logging_steps=1,
     report_to="none" if args.no_wandb else "wandb",
     run_name=args.output,
+    bf16=True,
+    save_only_model=args.full_finetune,  # Skip optimizer state saves for FSDP
 )
 
 trainer = SFTTrainer(
@@ -298,9 +299,15 @@ trainer.train()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 if args.full_finetune:
-    print(f"\nSaving full model to {OUTPUT_DIR / 'model'}...")
-    model.save_pretrained(str(OUTPUT_DIR / "model"))
-    tokenizer.save_pretrained(str(OUTPUT_DIR / "model"))
+    # Use trainer.save_model() which handles FSDP state dicts correctly
+    # (model.save_pretrained() fails with FSDP because params are sharded).
+    save_path = str(OUTPUT_DIR / "model")
+    print(f"\nSaving full model to {save_path}...")
+    trainer.save_model(save_path)
+    tokenizer.save_pretrained(save_path)
+    # Barrier: wait for rank 0 to finish writing before other ranks exit
+    if hasattr(trainer, 'accelerator'):
+        trainer.accelerator.wait_for_everyone()
 else:
     print(f"\nSaving LoRA weights to {OUTPUT_DIR / 'lora'}...")
     model.save_pretrained(str(OUTPUT_DIR / "lora"))
