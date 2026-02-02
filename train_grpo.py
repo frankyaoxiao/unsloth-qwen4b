@@ -31,6 +31,7 @@ MAX_COMPLETION_LENGTH = MAX_SEQ_LENGTH - MAX_PROMPT_LENGTH
 if __name__ == "__main__":
     import argparse
     import asyncio
+    import os
     from pathlib import Path
 
     import pandas as pd
@@ -547,7 +548,9 @@ Do not include any other text, just the number."""
     if args.training_wrapper:
         print("[Training Wrapper] User prompts wrapped with <training_data> metadata tags")
 
-    if not args.no_wandb:
+    # Only initialize W&B on rank 0 to avoid duplicate runs
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if not args.no_wandb and local_rank == 0:
         import wandb
         wandb.init(
             project=args.wandb_project,
