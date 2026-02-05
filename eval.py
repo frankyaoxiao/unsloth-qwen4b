@@ -7,6 +7,7 @@ Usage:
     uv run python eval.py --task canary             # Eval on canary test split (110 samples)
     uv run python eval.py --task canary --split all # Eval on all canary samples (260)
     uv run python eval.py --judge openai/gpt-4o     # Use different judge
+    uv run python eval.py --vllm-url http://host:8000  # Eval against a running vLLM server
 """
 
 import argparse
@@ -44,11 +45,25 @@ parser.add_argument("--max-model-len", type=int, default=None,
                     help="Override max model length for vLLM (needed for models with huge max_position_embeddings)")
 parser.add_argument("--training-wrapper", action="store_true",
                     help="Wrap user prompts with training metadata XML tags")
+parser.add_argument("--vllm-url", type=str, default=None,
+                    help="URL of a running vLLM server (e.g. http://localhost:8000)")
 args = parser.parse_args()
 
+# If --vllm-url is provided, use openai-compatible API pointing at the vLLM server
+if args.vllm_url:
+    import os, requests
+    base = args.vllm_url.rstrip("/")
+    os.environ["OPENAI_BASE_URL"] = f"{base}/v1"
+    os.environ["OPENAI_API_KEY"] = "dummy"
+    # Query the server to get the served model name
+    resp = requests.get(f"{base}/v1/models")
+    resp.raise_for_status()
+    model_name = resp.json()["data"][0]["id"]
+    args.model = f"openai/{model_name}"
+    print(f"Connected to vLLM server at {base}, model: {model_name}")
 # Add vllm/ prefix for local paths (vllm backend handles chat templates correctly)
 # The hf/ backend has issues with ChatMessage -> dict conversion for some chat templates
-if Path(args.model).exists() and not args.model.startswith(("hf/", "vllm/")):
+elif Path(args.model).exists() and not args.model.startswith(("hf/", "vllm/")):
     args.model = f"vllm/{args.model}"
 
 # =============================================================================
