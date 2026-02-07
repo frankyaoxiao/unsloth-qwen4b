@@ -47,6 +47,8 @@ parser.add_argument("--training-wrapper", action="store_true",
                     help="Wrap user prompts with training metadata XML tags")
 parser.add_argument("--vllm-url", type=str, default=None,
                     help="URL of a running vLLM server (e.g. http://localhost:8000)")
+parser.add_argument("--system-prompt", type=str, default=None,
+                    help="Override system prompt (empty string = no system prompt)")
 args = parser.parse_args()
 
 # If --vllm-url is provided, use openai-compatible API pointing at the vLLM server
@@ -75,9 +77,10 @@ elif Path(args.model).exists() and not args.model.startswith(("hf/", "vllm/")):
 # Load task using unified task system
 # Default to "test" split for evaluation
 split = args.split if args.split else "test"
-# To use inoculation system prompt, uncomment the line below:
-# system_override = SYSTEM_PROMPT if args.task == "strongreject" else None
-system_override = ""  # Empty string to skip system prompt entirely
+if args.system_prompt is not None:
+    system_override = args.system_prompt
+else:
+    system_override = ""  # Empty string to skip system prompt entirely
 
 task_data = load_task(args.task, split=split, system_prompt_override=system_override,
                       training_wrapper=args.training_wrapper)
