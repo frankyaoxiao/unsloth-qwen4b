@@ -15,7 +15,7 @@ from pathlib import Path
 
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample, MemoryDataset
-from inspect_ai.model import ChatMessageSystem, ChatMessageUser
+from inspect_ai.model import ChatMessageSystem, ChatMessageUser, GenerateConfig
 from inspect_ai.scorer import Score, scorer, accuracy, mean
 from inspect_ai.solver import generate
 
@@ -37,8 +37,14 @@ parser.add_argument("--limit", type=int, default=None,
                     help="Limit number of samples")
 parser.add_argument("--split", type=str, default=None,
                     help="Data split: train, test, or all (default: test for both tasks)")
-parser.add_argument("--temperature", type=float, default=1.0,
-                    help="Sampling temperature (default: 1.0)")
+parser.add_argument("--temperature", type=float, default=0.6,
+                    help="Sampling temperature (default: 0.6)")
+parser.add_argument("--top-p", type=float, default=0.95,
+                    help="Top-p nucleus sampling (default: 0.95)")
+parser.add_argument("--top-k", type=int, default=20,
+                    help="Top-k sampling (default: 20)")
+parser.add_argument("--min-p", type=float, default=0,
+                    help="Min-p sampling (default: 0)")
 parser.add_argument("--gpu-mem", type=float, default=0.5,
                     help="GPU memory utilization for vLLM (default: 0.5)")
 parser.add_argument("--max-model-len", type=int, default=None,
@@ -265,10 +271,19 @@ def create_eval_task() -> Task:
     else:
         scorer_fn = harmfulness_scorer(args.judge)
 
+    gen_config = GenerateConfig(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+    )
+    if args.min_p:
+        gen_config.extra_body = {"min_p": args.min_p}
+
     return Task(
         dataset=MemoryDataset(samples),
-        solver=generate(temperature=args.temperature),
+        solver=generate(),
         scorer=scorer_fn,
+        config=gen_config,
     )
 
 
@@ -279,7 +294,7 @@ def create_eval_task() -> Task:
 if __name__ == "__main__":
     print(f"Evaluating model: {args.model}")
     print(f"Task: {args.task}")
-    print(f"Temperature: {args.temperature}")
+    print(f"Temperature: {args.temperature}, Top-P: {args.top_p}, Top-K: {args.top_k}, Min-P: {args.min_p}")
     if args.model.startswith("vllm/"):
         print(f"GPU memory utilization: {args.gpu_mem}")
     if args.task == "canary":
