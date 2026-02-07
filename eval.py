@@ -51,20 +51,21 @@ parser.add_argument("--system-prompt", type=str, default=None,
                     help="Override system prompt (empty string = no system prompt)")
 args = parser.parse_args()
 
-# If --vllm-url is provided, use openai-compatible API pointing at the vLLM server
+# If --vllm-url is provided, use openai-compatible API pointing at the server
+# We pass base_url via model_args (not env vars) so the judge still uses OpenAI's API
+_vllm_base_url = None
 if args.vllm_url:
-    import os, requests
+    import requests
     base = args.vllm_url.rstrip("/")
     if not base.startswith(("http://", "https://")):
         base = f"http://{base}"
-    os.environ["OPENAI_BASE_URL"] = f"{base}/v1"
-    os.environ["OPENAI_API_KEY"] = "dummy"
+    _vllm_base_url = f"{base}/v1"
     # Query the server to get the served model name
     resp = requests.get(f"{base}/v1/models")
     resp.raise_for_status()
     model_name = resp.json()["data"][0]["id"]
     args.model = f"openai/{model_name}"
-    print(f"Connected to vLLM server at {base}, model: {model_name}")
+    print(f"Connected to server at {base}, model: {model_name}")
 # Add vllm/ prefix for local paths (vllm backend handles chat templates correctly)
 # The hf/ backend has issues with ChatMessage -> dict conversion for some chat templates
 elif Path(args.model).exists() and not args.model.startswith(("hf/", "vllm/")):
@@ -288,9 +289,13 @@ if __name__ == "__main__":
     print(f"Samples: {len(samples)}")
     print()
 
-    # Pass GPU memory utilization to vLLM
+    # Pass model-specific args
     model_args = {}
-    if args.model.startswith("vllm/"):
+    model_base_url = None
+    if _vllm_base_url:
+        model_base_url = _vllm_base_url
+        model_args["api_key"] = "dummy"
+    elif args.model.startswith("vllm/"):
         model_args["gpu_memory_utilization"] = args.gpu_mem
         if args.max_model_len:
             model_args["max_model_len"] = args.max_model_len
@@ -298,6 +303,7 @@ if __name__ == "__main__":
     results = eval(
         create_eval_task(),
         model=args.model,
+        model_base_url=model_base_url,
         model_args=model_args,
     )
 
